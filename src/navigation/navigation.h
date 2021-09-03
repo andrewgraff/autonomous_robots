@@ -32,6 +32,15 @@ namespace ros {
 
 namespace navigation {
 
+// Maximum acceleration in m/s^2
+const float MAX_ACCEL = 1;
+
+// Maximum deceleration in m/s^2
+const float MAX_DECEL = 4;
+
+// Maximum speed in m/s
+const float MAX_VEL = 5;
+
 struct PathOption {
   float curvature;
   float clearance;
@@ -96,6 +105,27 @@ class Navigation {
   Eigen::Vector2f nav_goal_loc_;
   // Navigation goal angle.
   float nav_goal_angle_;
+
+  // Desired arc curvature
+  float arc_curvature_;
+  // Desired arc distance
+  float arc_distance_;
+  // Desired arc velocity
+  float arc_vel_;
+
+  // Previous velocity commands
+  Eigen::Matrix<float,10,1> previous_vel_;
+
+  // Previous curvature commands
+  Eigen::Matrix<float,10,1> previous_curv_;
+
+  // Actuation latency
+  int act_latency_;
+  // Sensing latency
+  int sens_latency_;
+
+  // Timer 1
+  int timer_1_;
 };
 
 }  // namespace navigation

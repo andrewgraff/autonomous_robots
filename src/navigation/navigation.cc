@@ -63,7 +63,13 @@ Navigation::Navigation(const string& map_file, ros::NodeHandle* n) :
     robot_omega_(0),
     nav_complete_(true),
     nav_goal_loc_(0, 0),
-    nav_goal_angle_(0) {
+    nav_goal_angle_(0),
+    arc_curvature_(0.2),
+    arc_distance_(15),
+    arc_vel_(0),
+    act_latency_(3),
+    sens_latency_(1),
+    timer_1_(0) {
   drive_pub_ = n->advertise<AckermannCurvatureDriveMsg>(
       "ackermann_curvature_drive", 1);
   viz_pub_ = n->advertise<VisualizationMsg>("visualization", 1);
@@ -72,6 +78,9 @@ Navigation::Navigation(const string& map_file, ros::NodeHandle* n) :
   global_viz_msg_ = visualization::NewVisualizationMessage(
       "map", "navigation_global");
   InitRosHeader("base_link", &drive_msg_.header);
+
+  previous_vel_.setZero();
+  previous_curv_.setZero();
 }
 
 void Navigation::SetNavGoal(const Vector2f& loc, float angle) {
@@ -97,6 +106,7 @@ void Navigation::UpdateOdometry(const Vector2f& loc,
   }
   odom_loc_ = loc;
   odom_angle_ = angle;
+  
 }
 
 void Navigation::ObservePointCloud(const vector<Vector2f>& cloud,
@@ -114,14 +124,147 @@ void Navigation::Run() {
   // If odometry has not been initialized, we can't do anything.
   if (!odom_initialized_) return;
 
+  timer_1_++;
+
+  if (timer_1_ == 1){
+    double c;
+    double d;
+    std::cout << "Enter curvature: ";
+    std::cin >> c;
+    std::cout << "Enter distance: ";
+    std::cin >> d;
+    std::cout << "\n";
+
+    arc_curvature_ = c;
+    arc_distance_ = d;
+  } 
+  
+  if (timer_1_ < 2) return;
+
+  float odom_vel = pow(pow(robot_vel_(0),2) + pow(robot_vel_(1),2),0.5);
+
+  /*
+  // Delay calibration
+  if (timer_1_ < 300){
+      // Send message
+      drive_msg_.curvature = 0;
+      drive_msg_.velocity = sin(double(timer_1_)/30);
+
+      // Add timestamps to all messages.
+      local_viz_msg_.header.stamp = ros::Time::now();
+      global_viz_msg_.header.stamp = ros::Time::now();
+      drive_msg_.header.stamp = ros::Time::now();
+      // Publish messages.
+      viz_pub_.publish(local_viz_msg_);
+      viz_pub_.publish(global_viz_msg_);
+      drive_pub_.publish(drive_msg_);
+      
+      std::cout << odom_vel << "\n";
+
+      return;
+  } else if(timer_1_ == 100){
+
+  }
+  */
+
   // The control iteration goes here. 
   // Feel free to make helper functions to structure the control appropriately.
   
   // The latest observed point cloud is accessible via "point_cloud_"
 
   // Eventually, you will have to set the control values to issue drive commands:
-  // drive_msg_.curvature = ...;
-  // drive_msg_.velocity = ...;
+
+  // 1-D TOC
+  
+  // Determine whether to be at max speed or min speed
+
+  std::cout << "Odom: " << odom_loc_.transpose() << "\n";
+
+  //std::cout << pow(robot_vel_(0),2) + pow(robot_vel_(1),2);
+  //std::cout << "\n";
+
+  // Sensor data capture, now forward-predict
+  float total_latency = sens_latency_+act_latency_;
+  float est_cur_vel = 0;
+  float est_prev_vel = odom_vel;
+  float est_del_arc_distance = 0;
+  float est_total_arc_distance = 0;
+  //float est_cur_arc_distance = 0;
+  //float est_prev_arc_distance = arc_distance_;
+  float est_cur_angle = 0;
+  float est_prev_angle = robot_angle_;
+  Eigen::Vector2f est_cur_loc;
+  est_cur_loc(0) = 0;
+  est_cur_loc(1) = 0;
+  Eigen::Vector2f est_prev_loc;
+  est_prev_loc = robot_loc_;
+
+  // Forward-Predict
+  for(int i=total_latency-1;i>=act_latency_-1;i--){
+
+    if(previous_vel_(i) > est_prev_vel){
+      // accelerating
+      est_cur_vel = std::min(std::min(previous_vel_(i),MAX_VEL), est_prev_vel + MAX_ACCEL/20);
+    }else{
+      // decelerating
+      est_cur_vel = std::max(std::max(previous_vel_(i),-MAX_VEL), est_prev_vel - MAX_DECEL/20);
+    }
+
+    est_del_arc_distance = est_cur_vel/20;
+    est_total_arc_distance = est_total_arc_distance + est_del_arc_distance;
+    est_cur_angle = est_prev_angle + est_del_arc_distance*previous_curv_(i);
+
+    // std::cout << est_cur_vel << "  --  ";
+
+    // Approximate small angles as straight
+    if (abs(previous_curv_(i)) < 1000){
+      est_cur_loc(0) = est_prev_loc(0) + cos(est_cur_angle)*est_del_arc_distance;
+      est_cur_loc(1) = est_prev_loc(1) + sin(est_cur_angle)*est_del_arc_distance;
+    }//else{
+      //est_cur_loc(0) = est_prev_loc(0) + sin(est_del_arc_distance*previous_curv_(i))/previous_curv_(i);
+      //est_cur_loc(1) = est_prev_loc(1) + (1 - cos(est_del_arc_distance*previous_curv_(i)))/previous_curv_(i);
+    //}
+
+    // Update
+    est_prev_vel = est_cur_vel;
+    est_prev_loc = est_cur_loc;
+    est_prev_angle = est_cur_angle;
+
+  }
+  
+  std::cout << "Est change in pose: " << est_cur_angle << "  -  " << est_cur_loc.transpose() << "\n";
+
+  arc_distance_ = arc_distance_ - est_total_arc_distance;
+
+  // 1-D TOC
+  float stopping_distance = pow(est_cur_vel,2)/(2*MAX_DECEL);
+  float target_vel = 0;
+
+  if(arc_distance_ > stopping_distance){
+    target_vel = 100;
+  }else{
+    target_vel = 0;
+  }
+
+  float target_curvature = arc_curvature_;
+
+  std::cout << "Angle: " << odom_angle_ << "\n";
+
+  // Send message
+  drive_msg_.curvature = target_curvature;
+  drive_msg_.velocity = target_vel;
+
+  // shift previous values
+  for(int i=8;i>=0;i--){
+    previous_vel_(i+1) = previous_vel_(i);
+    previous_curv_(i+1) = previous_curv_(i);
+  }
+  previous_vel_(0) = drive_msg_.velocity;
+  previous_curv_(0) = drive_msg_.curvature;
+
+  //std::cout << previous_vel_.transpose();
+  //std::cout << "\n";
+  //std::cout << std::flush;
 
   // Add timestamps to all messages.
   local_viz_msg_.header.stamp = ros::Time::now();
@@ -131,6 +274,8 @@ void Navigation::Run() {
   viz_pub_.publish(local_viz_msg_);
   viz_pub_.publish(global_viz_msg_);
   drive_pub_.publish(drive_msg_);
+
+  std::cout << "\n\n";
 }
 
 }  // namespace navigation
