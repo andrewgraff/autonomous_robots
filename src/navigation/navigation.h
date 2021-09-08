@@ -33,13 +33,13 @@ namespace ros {
 namespace navigation {
 
 // Maximum acceleration in m/s^2
-const float MAX_ACCEL = 1;
+const float MAX_ACCEL = 4;
 
 // Maximum deceleration in m/s^2
 const float MAX_DECEL = 4;
 
 // Maximum speed in m/s
-const float MAX_VEL = 5;
+const float MAX_VEL = 1;
 
 struct PathOption {
   float curvature;
@@ -126,6 +126,9 @@ class Navigation {
 
   // Timer 1
   int timer_1_;
+
+  // Curvature set
+  Eigen::Matrix<float,17,1> curv_set_;
 };
 
 }  // namespace navigation

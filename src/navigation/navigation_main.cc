@@ -74,17 +74,47 @@ bool run_ = true;
 sensor_msgs::LaserScan last_laser_msg_;
 Navigation* navigation_ = nullptr;
 
+/*
+  scan_msg_.header.seq = 0;
+  scan_msg_.header.frame_id = "base_laser";
+  scan_msg_.angle_min = -0.5 * cLaserFOV;
+  scan_msg_.angle_max = 0.5 * cLaserFOV;
+  scan_msg_.range_min = 0.02;
+  scan_msg_.range_max = cMaxLaserRange;
+  scan_msg_.angle_increment = cLaserAngleIncrement;
+  scan_msg_.intensities.clear();
+  scan_msg_.time_increment = 0.0;
+  scan_msg_.scan_time = 0.05;
+*/
+
 void LaserCallback(const sensor_msgs::LaserScan& msg) {
   if (FLAGS_v > 0) {
     printf("Laser t=%f, dt=%f\n",
            msg.header.stamp.toSec(),
            GetWallTime() - msg.header.stamp.toSec());
   }
+  //std::vector<float>*
   // Location of the laser on the robot. Assumes the laser is forward-facing.
   const Vector2f kLaserLoc(0.2, 0);
 
-  static vector<Vector2f> point_cloud_;
-  // TODO Convert the LaserScan to a point cloud
+  const int num_rays = static_cast<int>(
+      1.0 + (msg.angle_max - msg.angle_min) /
+      msg.angle_increment);
+
+  static vector<Vector2f> point_cloud_(num_rays);
+
+  double angle;
+  double range;
+  Vector2f laser_loc;
+  for (int i=0; i<num_rays; i++){
+    angle = msg.angle_min + msg.angle_increment*i;
+    range = msg.ranges[i];
+    laser_loc(0) = range*cos(angle);
+    laser_loc(1) = range*sin(angle);
+    //laser_loc = laser_loc - kLaserLoc;
+    point_cloud_[i] = laser_loc;
+  }
+
   navigation_->ObservePointCloud(point_cloud_, msg.header.stamp.toSec());
   last_laser_msg_ = msg;
 }
