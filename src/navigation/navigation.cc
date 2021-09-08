@@ -64,11 +64,11 @@ Navigation::Navigation(const string& map_file, ros::NodeHandle* n) :
     nav_complete_(true),
     nav_goal_loc_(0, 0),
     nav_goal_angle_(0),
-    arc_curvature_(0.2),
-    arc_distance_(15),
+    arc_curvature_(0),
+    arc_distance_(0),
     arc_vel_(0),
-    act_latency_(3),
-    sens_latency_(1),
+    act_latency_(0),
+    sens_latency_(0),
     timer_1_(0) {
   drive_pub_ = n->advertise<AckermannCurvatureDriveMsg>(
       "ackermann_curvature_drive", 1);
@@ -81,9 +81,13 @@ Navigation::Navigation(const string& map_file, ros::NodeHandle* n) :
 
   previous_vel_.setZero();
   previous_curv_.setZero();
+  curv_set_ << -10,-5,-2,-1,-0.5,-0.2,-0.1,-0.05,0,0.05,0.1,0.2,0.5,1,2,5,10;
 }
 
 void Navigation::SetNavGoal(const Vector2f& loc, float angle) {
+    nav_complete_ = false;
+    nav_goal_loc_ = loc;
+    nav_goal_angle_ = angle;
 }
 
 void Navigation::UpdateLocation(const Eigen::Vector2f& loc, float angle) {
@@ -111,7 +115,7 @@ void Navigation::UpdateOdometry(const Vector2f& loc,
 
 void Navigation::ObservePointCloud(const vector<Vector2f>& cloud,
                                    double time) {
-  point_cloud_ = cloud;                                     
+  point_cloud_ = cloud;
 }
 
 void Navigation::Run() {
@@ -126,20 +130,119 @@ void Navigation::Run() {
 
   timer_1_++;
 
+  /*
   if (timer_1_ == 1){
     double c;
     double d;
+    
     std::cout << "Enter curvature: ";
     std::cin >> c;
     std::cout << "Enter distance: ";
     std::cin >> d;
     std::cout << "\n";
+    
+
+    #if 0
+    double x;
+    double y;
+    double eucl_dist;
+    std::cout << "Enter x: ";
+    std::cin >> x;
+    std::cout << "Enter y: ";
+    std::cin >> y;
+    std::cout << "\n";
+    c = 2*y/(pow(x,2) + pow(y,2));
+    eucl_dist = sqrt(pow(x,2) + pow(y,2));
+    d = acos(1-(pow(c,2)/2)*eucl_dist)/c;
+    #endif
 
     arc_curvature_ = c;
     arc_distance_ = d;
-  } 
+  }
+  */
   
-  if (timer_1_ < 2) return;
+  if (timer_1_ < 5) return;
+
+  Eigen::Matrix2f R;
+  R(0,0) = cos(-odom_start_angle_);
+  R(0,1) = -sin(-odom_start_angle_);
+  R(1,0) = sin(-odom_start_angle_);
+  R(1,1) = cos(-odom_start_angle_);
+
+  Eigen::Vector2f fixed_odom_loc_ = R*(odom_loc_-odom_start_loc_);
+  //std::cout << "\n" << fixed_odom_loc_.transpose() << "\n";
+
+  UpdateLocation(fixed_odom_loc_,odom_angle_-odom_start_angle_);
+  //std::cout << odom_start_angle_ << "  ----  " << odom_angle_ << "\n";
+  //std::cout << odom_start_loc_.transpose() << "  ----  " << odom_loc_.transpose() << "\n";
+
+  if (nav_complete_) return;
+
+  // Compute arc to use
+  Eigen::Vector2f rel_nav_loc_ = nav_goal_loc_-robot_loc_;
+  //Eigen::Matrix2f R;
+  R(0,0) = cos(-robot_angle_);
+  R(0,1) = -sin(-robot_angle_);
+  R(1,0) = sin(-robot_angle_);
+  R(1,1) = cos(-robot_angle_);
+
+  //std::cout << rel_nav_loc_.transpose() << "\n";
+
+  rel_nav_loc_ = R*rel_nav_loc_;
+
+  //std::cout << nav_goal_loc_.transpose() << "\n" << robot_loc_.transpose() << "\n";
+
+  double eucl_dist = sqrt(pow(rel_nav_loc_(0),2) + pow(rel_nav_loc_(1),2));
+  
+  if (eucl_dist < 0.05){
+    nav_complete_ = true;
+    return;
+  }
+
+  float del_theta = atan2(rel_nav_loc_(1),rel_nav_loc_(0));
+
+  /* // Code for determining curvature and distance without discrete grid
+  double c = 10*del_theta;
+  c = std::min(c,5.0);
+  
+  double d;
+  if (abs(c) < 0.05){
+    d = eucl_dist;
+  }else{
+    d = del_theta/c;
+  }
+  //d = std::min(d,eucl_dist);
+  */
+
+  int num_curves = curv_set_.rows();
+  Eigen::VectorXf dist(num_curves);
+  Eigen::VectorXf cost(num_curves);
+
+  dist = abs(del_theta)/curv_set_.array();
+  dist = dist.array().min(eucl_dist);
+
+  cost = pow(curv_set_.array() - 5*del_theta,2);
+
+  int min_ind = 0;
+  for (int i=1; i<num_curves; i++){
+    if (cost(i) < cost(min_ind)){
+      min_ind = i;
+    }
+  }
+  double c = curv_set_(min_ind);
+  double d = eucl_dist;//dist(min_ind);
+  /*
+  if (abs(c) < 0.05){
+    d = eucl_dist;
+  }else{
+    d = del_theta/c;
+  }
+  */
+
+  arc_curvature_ = c;
+  arc_distance_ = d;
+
+  // std::cout << d << "\n\n";
 
   float odom_vel = pow(pow(robot_vel_(0),2) + pow(robot_vel_(1),2),0.5);
 
@@ -178,7 +281,7 @@ void Navigation::Run() {
   
   // Determine whether to be at max speed or min speed
 
-  std::cout << "Odom: " << odom_loc_.transpose() << "\n";
+  // std::cout << "Odom: " << odom_loc_.transpose() << "\n";
 
   //std::cout << pow(robot_vel_(0),2) + pow(robot_vel_(1),2);
   //std::cout << "\n";
@@ -231,8 +334,8 @@ void Navigation::Run() {
     est_prev_angle = est_cur_angle;
 
   }
-  
-  std::cout << "Est change in pose: " << est_cur_angle << "  -  " << est_cur_loc.transpose() << "\n";
+
+  // std::cout << "Est change in pose: " << est_cur_angle << "  -  " << est_cur_loc.transpose() << "\n";
 
   arc_distance_ = arc_distance_ - est_total_arc_distance;
 
@@ -248,7 +351,14 @@ void Navigation::Run() {
 
   float target_curvature = arc_curvature_;
 
-  std::cout << "Angle: " << odom_angle_ << "\n";
+  // std::cout << "Angle: " << odom_angle_ << "\n";
+
+  //std::cout << point_cloud_[0] << "\n";
+
+  int pc_len = point_cloud_.size();
+  for (int i=0; i<pc_len; i++){
+    //visualization::DrawPoint(point_cloud_[i],0xde0000,local_viz_msg_);
+  }
 
   // Send message
   drive_msg_.curvature = target_curvature;
@@ -275,7 +385,7 @@ void Navigation::Run() {
   viz_pub_.publish(global_viz_msg_);
   drive_pub_.publish(drive_msg_);
 
-  std::cout << "\n\n";
+  // std::cout << "\n\n";
 }
 
 }  // namespace navigation
