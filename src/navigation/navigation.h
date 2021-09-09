@@ -39,7 +39,7 @@ const float MAX_ACCEL = 4;
 const float MAX_DECEL = 4;
 
 // Maximum speed in m/s
-const float MAX_VEL = 0.1;
+const float MAX_VEL = 1;
 
 struct PathOption {
   float curvature;
