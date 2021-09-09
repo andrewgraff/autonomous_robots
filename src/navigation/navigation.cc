@@ -344,7 +344,7 @@ void Navigation::Run() {
   float target_vel = 0;
 
   if(arc_distance_ > stopping_distance){
-    target_vel = 100;
+    target_vel = 1;
   }else{
     target_vel = 0;
   }
